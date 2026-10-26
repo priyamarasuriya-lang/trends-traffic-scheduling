@@ -152,3 +152,26 @@ export function SubmitButton({ children, variant, className }: { children: React
 export function FormActions({ children }: { children: React.ReactNode }) {
   return <div className="flex justify-end gap-2 border-t border-border pt-3">{children}</div>;
 }
+
+/** A set of checkboxes posting the same field name once per ticked value. */
+export function CheckGroup({ name, label, options, defaultValue = [], columns = 2, hint }: { name: string; label: string; options: { value: string; label: string; hint?: string }[]; defaultValue?: string[]; columns?: number; hint?: string }) {
+  const err = useFieldError(name);
+  return (
+    <fieldset className="space-y-1.5">
+      <legend className="mb-1 text-xs font-medium text-muted">{label}</legend>
+      <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}>
+        {options.map((o) => (
+          <label key={o.value} className="flex items-start gap-2 text-sm">
+            <input type="checkbox" name={name} value={o.value} defaultChecked={defaultValue.includes(o.value)} className="mt-0.5 size-4 accent-[var(--primary)]" />
+            <span>
+              {o.label}
+              {o.hint && <span className="block text-xs text-muted">{o.hint}</span>}
+            </span>
+          </label>
+        ))}
+      </div>
+      {hint && <p className="text-xs text-muted">{hint}</p>}
+      {err && <p className="text-xs text-danger">{err}</p>}
+    </fieldset>
+  );
+}

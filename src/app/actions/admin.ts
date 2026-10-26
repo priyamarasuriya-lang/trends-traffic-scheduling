@@ -109,7 +109,7 @@ export async function saveUserAction(id: string | null, fd: FormData) {
       await audit({ userId: actor.id, userEmail: actor.email, action: id ? "user.update" : "user.create", entityType: "User", entityId: user.id, before, after: { ...data, roles: roles.map((r) => r.key), channelIds: p.channelIds } }, tx);
       return user;
     });
-    if (p.sendInvite) await issuePasswordLink(user, 72);
+    if (p.sendInvite) await issuePasswordLink(user, id ? 24 : 72, id ? "auth.password_reset" : "auth.invite");
     return { id: user.id };
   }, "User saved");
 }

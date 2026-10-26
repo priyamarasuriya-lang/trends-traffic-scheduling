@@ -15,7 +15,8 @@ export const DEFAULT_TEMPLATES: Record<string, { name: string; subject: string; 
   "invoice.overdue": { name: "Invoice overdue", subject: "Invoice {{number}} is overdue", body: "Invoice {{number}} for {{client}} is overdue with {{balance}} outstanding (due {{dueDate}}).", recipientRoles: ["FINANCE_OFFICER", "ACCOUNTANT"] },
   "payment.confirmed": { name: "Payment confirmation", subject: "Payment {{reference}} received", body: "A payment of {{amount}} ({{reference}}) was recorded.", recipientRoles: ["FINANCE_OFFICER", "ACCOUNTANT"] },
   "integration.failed": { name: "Integration failure", subject: "Integration {{integration}} failed", body: "Job {{job}} ({{kind}}) failed after {{attempts}} attempt(s): {{error}}", recipientRoles: ["SYSTEM_ADMIN"] },
-  "auth.password_reset": { name: "Password reset", subject: "Reset your TRENDS password", body: "Use this link within 60 minutes to reset your password: {{link}}\nIf you did not ask for this, ignore this email.", recipientRoles: [] },
+  "auth.password_reset": { name: "Password reset", subject: "Reset your TRENDS password", body: "Use this link within {{hours}} hour(s) to set a new password: {{link}}\nIf you did not ask for this, ignore this email.", recipientRoles: [] },
+  "auth.invite": { name: "Account invitation", subject: "You have been invited to TRENDS", body: "An account was created for you. Choose your password within {{hours}} hours: {{link}}", recipientRoles: [] },
 };
 
 export function render(tpl: string, vars: Record<string, unknown>) {
