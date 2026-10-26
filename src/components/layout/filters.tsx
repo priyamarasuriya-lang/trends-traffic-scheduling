@@ -38,12 +38,13 @@ export function SearchBox({ placeholder = "Search…", param = "q" }: { placehol
   );
 }
 
-export function FilterSelect({ param, options, label }: { param: string; options: { value: string; label: string }[]; label: string }) {
+/** A URL-param select. With `current`, there is no "all" option and `current` is shown when the param is unset. */
+export function FilterSelect({ param, options, label, current }: { param: string; options: { value: string; label: string }[]; label: string; current?: string }) {
   const params = useSearchParams();
   const set = useSetParam();
   return (
-    <Select value={params.get(param) ?? ""} onChange={(e) => set({ [param]: e.target.value })} aria-label={label} className="w-auto min-w-36">
-      <option value="">{label}: all</option>
+    <Select value={params.get(param) ?? current ?? ""} onChange={(e) => set({ [param]: e.target.value })} aria-label={label} className="w-auto min-w-36">
+      {current === undefined && <option value="">{label}: all</option>}
       {options.map((o) => (
         <option key={o.value} value={o.value}>
           {o.label}
