@@ -225,6 +225,8 @@ async function allocateTx(tx: Tx, actor: BillingActor, paymentId: string, invoic
   if (payment.status !== "CONFIRMED") throw new AppError("Only confirmed payments can be allocated.");
   const inv = await tx.invoice.findUniqueOrThrow({ where: { id: invoiceId } });
   if (["DRAFT", "CANCELLED"].includes(inv.status)) throw new AppError(`Invoice ${inv.number ?? "(draft)"} is ${inv.status.toLowerCase()} and cannot take payments.`);
+  const samePayer = payment.agencyId ? inv.agencyId === payment.agencyId : inv.clientId === payment.clientId && !inv.agencyId;
+  if (!samePayer) throw new AppError(`Invoice ${inv.number} is billed to a different payer than this payment.`);
   if (inv.currency !== payment.currency) throw new AppError(`Currency mismatch: payment is ${payment.currency}, invoice is ${inv.currency}.`);
   if (amt.gt(left)) throw new AppError(`Only ${formatMoney(left, payment.currency)} of this payment is unallocated.`);
   if (amt.gt(D(inv.balance))) throw new AppError(`Invoice ${inv.number} has only ${formatMoney(inv.balance, inv.currency)} outstanding.`);

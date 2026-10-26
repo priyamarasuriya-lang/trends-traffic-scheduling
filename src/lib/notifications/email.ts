@@ -1,6 +1,6 @@
 import { prisma } from "../db";
 
-export type EmailMessage = { to: string; subject: string; text: string; template?: string };
+export type EmailMessage = { to: string; subject: string; text: string; template?: string; attachments?: { filename: string; content: Buffer; contentType?: string }[] };
 
 interface EmailProvider {
   name: string;
@@ -21,7 +21,7 @@ function smtpProvider(): EmailProvider {
         secure: process.env.SMTP_SECURE === "true",
         auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASSWORD } : undefined,
       });
-      await transport.sendMail({ from: process.env.EMAIL_FROM ?? "TRENDS <no-reply@localhost>", to: msg.to, subject: msg.subject, text: msg.text });
+      await transport.sendMail({ from: process.env.EMAIL_FROM ?? "TRENDS <no-reply@localhost>", to: msg.to, subject: msg.subject, text: msg.text, attachments: msg.attachments });
     },
   };
 }
