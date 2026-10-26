@@ -64,10 +64,14 @@ export async function lowInventoryNotices(now = new Date()) {
   return sent;
 }
 
-/** Remove expired sessions and spent reset links. */
+/** Remove expired sessions, spent reset links and sign-in attempts older than 90 days. */
 export async function housekeeping(now = new Date()) {
-  const [s, t] = await Promise.all([prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }), prisma.passwordResetToken.deleteMany({ where: { OR: [{ expiresAt: { lt: now } }, { usedAt: { not: null } }] } })]);
-  return { sessions: s.count, resetTokens: t.count };
+  const [s, t, a] = await Promise.all([
+    prisma.session.deleteMany({ where: { expiresAt: { lt: now } } }),
+    prisma.passwordResetToken.deleteMany({ where: { OR: [{ expiresAt: { lt: now } }, { usedAt: { not: null } }] } }),
+    prisma.loginAttempt.deleteMany({ where: { createdAt: { lt: new Date(now.getTime() - 90 * DAY) } } }),
+  ]);
+  return { sessions: s.count, resetTokens: t.count, loginAttempts: a.count };
 }
 
 /** Everything a scheduler (cron, systemd timer, platform cron) should run every few minutes. All steps are idempotent. */

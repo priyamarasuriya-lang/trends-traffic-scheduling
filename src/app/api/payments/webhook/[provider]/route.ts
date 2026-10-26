@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { Prisma } from "@prisma/client";
 import { gatewayByKey, applyGatewayEvent } from "@/lib/payments/gateway";
 import { audit } from "@/lib/audit";
+import { prisma } from "@/lib/db";
 import { AppError } from "@/lib/errors";
 
 // Payment provider notifications. The body is verified with the provider's
@@ -18,6 +19,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ pro
     await audit({ action: "payment.webhook.rejected", entityType: "Payment", after: { provider, reason: "signature" } });
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
+  // A correctly signed notification proves the live connection works end to end.
+  if (!g.isSimulated) await prisma.integration.update({ where: { key: "PAYMENT" }, data: { status: "CONNECTED", lastCheckedAt: new Date(), lastError: null } }).catch(() => {});
   try {
     const r = await applyGatewayEvent(provider, evt);
     return NextResponse.json({ received: true, ...r });
