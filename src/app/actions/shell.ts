@@ -19,3 +19,11 @@ export async function markNotificationsReadAction(ids?: string[]) {
     await prisma.notification.updateMany({ where: { userId: u.id, readAt: null, ...(ids ? { id: { in: ids } } : {}) }, data: { readAt: new Date() } });
   });
 }
+
+export async function signOutOtherSessionsAction() {
+  return run(async () => {
+    const u = await requireUser();
+    const n = await prisma.session.deleteMany({ where: { userId: u.id, id: { not: u.sessionId } } });
+    return { count: n.count };
+  }, "Other sessions signed out");
+}
