@@ -5,11 +5,11 @@ import { prisma } from "@/lib/db";
 import { audit } from "@/lib/audit";
 import { clientIp, createSession, destroySession, getCurrentUser, requireUser } from "@/lib/auth/session";
 import { hashPassword, passwordPolicyError, verifyPassword } from "@/lib/auth/password";
-import { hashToken, newToken } from "@/lib/auth/tokens";
+import { hashToken } from "@/lib/auth/tokens";
+import { issuePasswordLink } from "@/lib/auth/reset";
 import { rateLimit } from "@/lib/rate-limit";
 import { run, type ActionResult } from "@/lib/action";
 import { AppError } from "@/lib/errors";
-import { notify } from "@/lib/notifications/service";
 
 const MAX_FAILS_PER_EMAIL = 5;
 const MAX_FAILS_PER_IP = 20;
@@ -67,10 +67,7 @@ export async function requestResetAction(_: unknown, fd: FormData): Promise<Acti
   if (!z.string().email().safeParse(email).success) return generic;
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user || user.status !== "ACTIVE" || user.deletedAt) return generic;
-  const token = newToken();
-  await prisma.passwordResetToken.deleteMany({ where: { userId: user.id, usedAt: null } });
-  await prisma.passwordResetToken.create({ data: { userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 60 * 60 * 1000) } });
-  await notify("auth.password_reset", { link: `${process.env.APP_URL ?? ""}/reset-password/${token}` }, { emails: [user.email] });
+  await issuePasswordLink(user, 1);
   await audit({ userId: user.id, userEmail: email, action: "auth.reset.requested", ip });
   return generic;
 }
