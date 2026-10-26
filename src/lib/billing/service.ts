@@ -302,6 +302,12 @@ export async function refreshOverdue(now = new Date()) {
   }
   const days = (await getSetting("notifications.paymentReminderDays")).days;
   const soon = await prisma.invoice.findMany({ where: { status: { in: ["ISSUED", "PARTIALLY_PAID"] }, dueDate: { gte: now, lt: new Date(now.getTime() + days * 86400000) }, balance: { gt: 0 } } });
-  for (const inv of soon) await notify("invoice.reminder", { number: inv.number, balance: formatMoney(inv.balance, inv.currency), dueDate: inv.dueDate?.toISOString().slice(0, 10) }, { link: `/invoices/${inv.id}` });
+  for (const inv of soon) {
+    // One reminder per invoice and due date, however often the job runs.
+    const key = `reminder:${inv.id}:${inv.dueDate?.toISOString().slice(0, 10)}`;
+    if (await prisma.auditLog.findFirst({ where: { action: "job.notice", entityId: key }, select: { id: true } })) continue;
+    await prisma.auditLog.create({ data: { action: "job.notice", entityType: "Invoice", entityId: key } });
+    await notify("invoice.reminder", { number: inv.number, balance: formatMoney(inv.balance, inv.currency), dueDate: inv.dueDate?.toISOString().slice(0, 10) }, { link: `/invoices/${inv.id}` });
+  }
   return { overdue: due.length, reminders: soon.length };
 }

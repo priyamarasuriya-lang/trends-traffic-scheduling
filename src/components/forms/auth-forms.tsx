@@ -76,7 +76,7 @@ export function ResetForm({ token }: { token: string }) {
       <div>
         <Label htmlFor="password">New password</Label>
         <Input id="password" name="password" type="password" autoComplete="new-password" required minLength={10} />
-        <p className="mt-1 text-xs text-muted">At least 10 characters with letters and digits.</p>
+        <p className="mt-1 text-xs text-muted">At least 12 characters with letters and digits.</p>
       </div>
       <div>
         <Label htmlFor="confirm">Confirm password</Label>

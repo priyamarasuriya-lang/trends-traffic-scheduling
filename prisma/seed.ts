@@ -307,7 +307,10 @@ async function demo() {
 
 async function main() {
   await foundation();
-  if (process.env.SEED_DEMO !== "false") await demo();
+  // Demo data never loads in production unless explicitly requested.
+  const wantDemo = process.env.SEED_DEMO ? process.env.SEED_DEMO === "true" : process.env.NODE_ENV !== "production";
+  if (wantDemo) await demo();
+  else console.log("Demo data skipped. Create the first administrator with `npm run create-admin -- --email you@company.com`.");
 }
 
 main()

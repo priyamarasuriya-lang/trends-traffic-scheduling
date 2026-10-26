@@ -3,7 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 // Cheap edge check: no session cookie → send to login. Full session validation
 // (expiry, idle timeout, account status, permissions) happens server-side on
 // every page, action and API route.
-const PUBLIC = [/^\/login/, /^\/forgot-password/, /^\/reset-password/, /^\/pay\//, /^\/api\/payments\/webhook/, /^\/api\/health/, /^\/_next/, /^\/favicon/];
+const PUBLIC = [/^\/login/, /^\/forgot-password/, /^\/reset-password/, /^\/pay\//, /^\/api\/payments\/webhook/, /^\/api\/health/, /^\/api\/jobs$/, /^\/_next/, /^\/favicon/];
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
