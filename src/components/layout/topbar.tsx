@@ -29,7 +29,7 @@ export function Topbar({ user, channels, channelId, notifications, unread, nav }
         <Link href="/dashboard" className="hover:text-fg">
           Home
         </Link>
-        {crumbs.map((c, i) => (
+        {crumbs.map((c, i) => c === "item" ? null : (
           <React.Fragment key={i}>
             <ChevronRight className="size-3.5" />
             {i === crumbs.length - 1 ? (
