@@ -4,7 +4,7 @@ import { AppError } from "./errors";
 
 export type ActionResult<T = unknown> =
   | { ok: true; data?: T; message?: string }
-  | { ok: false; error: string; fieldErrors?: Record<string, string[] | undefined>; details?: unknown };
+  | { ok: false; error: string; code?: string; fieldErrors?: Record<string, string[] | undefined>; details?: unknown };
 
 function isNextControlFlow(e: unknown) {
   const d = (e as { digest?: string })?.digest;
@@ -17,7 +17,7 @@ export function toActionError(e: unknown): ActionResult<never> {
   if (e instanceof z.ZodError) {
     return { ok: false, error: "Please correct the highlighted fields.", fieldErrors: e.flatten().fieldErrors as Record<string, string[]> };
   }
-  if (e instanceof AppError) return { ok: false, error: e.message, details: e.details };
+  if (e instanceof AppError) return { ok: false, error: e.message, code: e.code, details: e.details };
   if (e instanceof Prisma.PrismaClientKnownRequestError) {
     if (e.code === "P2002") return { ok: false, error: `A record with the same ${(e.meta?.target as string[] | undefined)?.join(", ") ?? "value"} already exists.` };
     if (e.code === "P2025") return { ok: false, error: "The record no longer exists or was changed by someone else. Refresh and try again." };
