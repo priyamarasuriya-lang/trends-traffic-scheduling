@@ -122,7 +122,7 @@ export async function getOrCreateSchedule(tx: Tx, channelId: string, broadcastDa
 }
 
 /** Guard + mark a schedule as changed. Published schedules need explicit permission and revert to draft. */
-async function touchSchedule(tx: Tx, scheduleId: string, actor: Actor, confirmPublishedEdit: boolean) {
+export async function touchSchedule(tx: Tx, scheduleId: string, actor: Actor, confirmPublishedEdit: boolean) {
   const s = await tx.schedule.findUniqueOrThrow({ where: { id: scheduleId } });
   if (s.status === "PUBLISHED") {
     if (!actor.canEditPublished) throw new AppError(`The ${s.broadcastDate} schedule is published. Only users with publish permission can change it.`, "PUBLISHED_LOCKED");
