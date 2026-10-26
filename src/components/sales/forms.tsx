@@ -8,7 +8,7 @@ import { formatMoney } from "@/lib/money";
 
 type Opt = { value: string; label: string };
 type FormInitial = { clientId?: string; agencyId?: string; dealId?: string; campaignName?: string; startDate?: string; endDate?: string; currency?: string; discountPct?: string; commissionPct?: string; taxRatePct?: string; clientRef?: string; notes?: string; lines?: Line[] };
-export type SalesOptions = { clients: (Opt & { agencyId: string | null })[]; agencies: (Opt & { commissionPct: string })[]; channels: Opt[]; commercials: (Opt & { advertiserId: string | null; durationSec: number })[]; deals: (Opt & { clientId: string })[]; currency: string; taxPct: string };
+export type SalesOptions = { clients: (Opt & { agencyId: string | null; taxPct: string | null })[]; agencies: (Opt & { commissionPct: string })[]; channels: Opt[]; commercials: (Opt & { advertiserId: string | null; durationSec: number })[]; deals: (Opt & { clientId: string })[]; currency: string; taxPct: string };
 
 const BANDS = [
   { value: "PRIME", label: "Prime" },
@@ -50,6 +50,7 @@ export function DealForm({ id, opts, initial }: { id: string | null; opts: Sales
             const ag = opts.clients.find((c) => c.value === e.target.value)?.agencyId ?? "";
             st.setAgencyId(ag);
             setCommission(opts.agencies.find((a) => a.value === ag)?.commissionPct ?? "0");
+            setTax(opts.clients.find((c) => c.value === e.target.value)?.taxPct ?? opts.taxPct);
           }}
         />
         <SelectField
@@ -120,6 +121,7 @@ export function ROForm({ id, opts, initial }: { id: string | null; opts: SalesOp
             const ag = opts.clients.find((c) => c.value === e.target.value)?.agencyId ?? "";
             st.setAgencyId(ag);
             setCommission(opts.agencies.find((a) => a.value === ag)?.commissionPct ?? "0");
+            setTax(opts.clients.find((c) => c.value === e.target.value)?.taxPct ?? opts.taxPct);
           }}
         />
         <SelectField
