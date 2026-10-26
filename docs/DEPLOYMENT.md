@@ -42,6 +42,34 @@ Then sign in, and in **System Settings**:
 - Create channels and users in **Channels** and **User Management**.
 - Load rate cards and tax rates in **Rate Cards & Tax**.
 
+## Deploying on Vercel
+
+The repository is ready for Vercel. `vercel.json` sets the build command (`npm run vercel-build`), a daily cron for `/api/jobs` and longer time limits for jobs and report exports.
+
+1. **Import the project.** In Vercel, choose **Add New → Project**, import the GitHub repository and keep the detected Next.js settings.
+2. **Add a database.** In the project's **Storage** tab, create a **Neon (Postgres)** database and connect it to the project. This sets `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct, used for migrations).
+3. **Add file storage.** In **Storage**, create a **Blob** store and connect it. This sets `BLOB_READ_WRITE_TOKEN`. The local disk on Vercel is not persistent.
+4. **Set environment variables** in **Settings → Environment Variables**:
+
+| Variable | Value |
+| --- | --- |
+| `APP_URL` | `https://<your-project>.vercel.app` (or your custom domain) |
+| `STORAGE_DRIVER` | `vercel-blob` |
+| `ALLOW_UNSCANNED_FILES` | `true` until a scanner is configured, then `false` |
+| `CRON_SECRET` | a long random string; Vercel Cron sends it automatically |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | the first super administrator, created on the first deploy only while none exists. Remove `ADMIN_PASSWORD` after the first successful sign-in |
+| `SEED_DEMO`, `DEV_ADMIN_PASSWORD` | optional: `SEED_DEMO=true` loads demo data for a showcase deployment. Never on a real production database |
+| `PAYMENT_GATEWAY`, `SIMULATED_GATEWAY_SECRET`, `ALLOW_SIMULATED_PAYMENTS` | optional: `simulated` / any secret / `true` for a TEST MODE payment demo |
+| SMTP, Stripe and integration variables | as in the table above, when you have them |
+
+5. **Deploy.** Each build runs the migrations, the idempotent foundation seed, the first-admin bootstrap and `next build`.
+6. **Check it.** Open `/api/health`, then sign in with `ADMIN_EMAIL`.
+
+Notes for Vercel:
+
+- The Hobby plan allows one cron run per day. On Pro, change the schedule in `vercel.json` to `*/10 * * * *` so reminders and integration retries run every 10 minutes.
+- The sign-in rate limiter is kept per serverless instance. Account lockout after 5 failed attempts is stored in the database and still applies everywhere.
+
 ## 4. Schedule background work
 
 Overdue invoices, payment reminders, agreement expiry, licence, promo and low-inventory notices, integration retries and session clean-up all run from one idempotent command. Run it every 5 to 15 minutes:

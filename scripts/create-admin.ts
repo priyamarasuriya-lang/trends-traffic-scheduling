@@ -30,9 +30,15 @@ async function readPassword() {
 }
 
 async function main() {
-  const email = arg("email")?.trim().toLowerCase();
-  const name = arg("name")?.trim() || "Administrator";
-  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Pass --email you@company.com");
+  const email = (arg("email") ?? process.env.ADMIN_EMAIL)?.trim().toLowerCase();
+  const name = (arg("name") ?? process.env.ADMIN_NAME)?.trim() || "Administrator";
+  // --if-none: used by automated deploys; does nothing once any active super administrator exists.
+  if (process.argv.includes("--if-none")) {
+    if (!email) return console.log("ADMIN_EMAIL not set; skipping first-admin bootstrap.");
+    const existing = await prisma.user.count({ where: { status: "ACTIVE", deletedAt: null, roles: { some: { role: { key: "SUPER_ADMIN" } } } } });
+    if (existing) return console.log("A super administrator already exists; skipping first-admin bootstrap.");
+  }
+  if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw new Error("Pass --email you@company.com (or set ADMIN_EMAIL)");
   const role = await prisma.role.findUnique({ where: { key: "SUPER_ADMIN" } });
   if (!role) throw new Error("Roles are missing. Run `npm run db:seed` first.");
   const password = await readPassword();
