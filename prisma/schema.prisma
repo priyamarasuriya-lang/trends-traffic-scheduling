@@ -1,0 +1,1111 @@
+// TRENDS — Traffic, Media Scheduling & Billing Management System
+// PostgreSQL schema. All timestamps are stored in UTC; channel-local display
+// uses Channel.timezone. Durations are integer seconds. Money is Decimal(18,2)
+// (Decimal(9,4) for percentages) and is never handled as floating point.
+//
+// Deliberate denormalisation (see docs/DATABASE.md):
+//  * Deal/ReleaseOrder/Invoice header totals are cached sums of their line
+//    items. They are only ever written by the billing service inside the same
+//    transaction that writes the lines.
+//  * Invoice.amountPaid / creditedTotal / balance are cached from
+//    PaymentAllocation and CreditNote rows and recomputed by
+//    recalcInvoiceBalance() in every transaction that touches them.
+//  * MediaAsset.playCount is a cache of confirmed ContentPlayLog rows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Identity & access ─────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  LOCKED
+  DISABLED
+}
+
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  name          String
+  passwordHash  String
+  status        UserStatus @default(ACTIVE)
+  allChannels   Boolean    @default(false) // may access every channel without explicit assignment
+  lastLoginAt   DateTime?
+  passwordChangedAt DateTime?
+  isDemo        Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  deletedAt     DateTime?
+
+  roles         UserRole[]
+  channels      ChannelUser[]
+  sessions      Session[]
+  resetTokens   PasswordResetToken[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  managedAgencies Agency[] @relation("AgencyManager")
+  managedClients  Client[] @relation("ClientManager")
+}
+
+model Role {
+  id          String           @id @default(cuid())
+  key         String           @unique // e.g. SUPER_ADMIN
+  name        String
+  description String?
+  isSystem    Boolean          @default(false)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  users       UserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String           @id @default(cuid())
+  key         String           @unique // e.g. schedule.publish
+  module      String
+  description String
+  roles       RolePermission[]
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserRole {
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique // sha256 of the cookie token; the raw token is never stored
+  userId     String
+  expiresAt  DateTime
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  email     String
+  ip        String?
+  success   Boolean
+  createdAt DateTime @default(now())
+
+  @@index([email, createdAt])
+  @@index([ip, createdAt])
+}
+
+// ───────────────────────────── Channels ─────────────────────────────
+
+model Channel {
+  id                    String   @id @default(cuid())
+  code                  String   @unique
+  name                  String
+  timezone              String   @default("UTC") // IANA zone
+  broadcastDayStartHour Int      @default(6)     // broadcast day boundary in local time
+  broadcastDays         Int[]    @default([0, 1, 2, 3, 4, 5, 6]) // 0 = Sunday
+  color                 String   @default("#0ea5e9")
+  territory             String?
+  isActive              Boolean  @default(true)
+  isDemo                Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  deletedAt             DateTime?
+
+  users           ChannelUser[]
+  schedules       Schedule[]
+  events          ScheduleEvent[]
+  secondaryEvents SecondaryEvent[]
+  breaks          AdvertisingBreak[]
+  rules           SchedulingRule[]
+  rateCards       RateCard[]
+  dealLines       DealLineItem[]
+  roLines         ReleaseOrderLineItem[]
+  playLogs        ContentPlayLog[]
+}
+
+model ChannelUser {
+  channelId String
+  userId    String
+  createdAt DateTime @default(now())
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([channelId, userId])
+}
+
+// ───────────────────────────── Media ─────────────────────────────
+
+enum AssetCategory {
+  PROGRAM
+  MOVIE
+  COMMERCIAL
+  PROMO
+  TIMER
+  SLIDE
+  COMING_UP
+  FILLER
+  NEW_MEDIA
+  SECONDARY
+}
+
+enum ApprovalStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  RETIRED
+}
+
+model MediaAsset {
+  id               String         @id @default(cuid())
+  assetCode        String         @unique // house number / asset ID
+  title            String
+  category         AssetCategory
+  description      String?
+  durationSec      Int
+  fileRef          String?        // path/URI in the media store or AMS
+  thumbnailUrl     String?
+  language         String?
+  version          Int            @default(1)
+  approvalStatus   ApprovalStatus @default(PENDING)
+  rightsOwner      String?
+  licenseStart     DateTime?      // convenience summary; authoritative rights live in ContentLicense
+  licenseEnd       DateTime?
+  permittedChannelIds String[]    @default([]) // empty = all channels
+  maxPlays         Int?
+  playCount        Int            @default(0) // cache of confirmed plays (ContentPlayLog.status = CONFIRMED)
+  contentCategory  String?        // e.g. ALCOHOL, KIDS, NEWS — used by category restriction rules
+  brand            String?        // commercials: brand for separation rules
+  productCategory  String?        // commercials: competitor category
+  advertiserId     String?        // commercials: owning client
+  isDemo           Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  deletedAt        DateTime?
+
+  advertiser      Client?            @relation(fields: [advertiserId], references: [id])
+  versions        MediaAssetVersion[]
+  licenses        ContentLicense[]
+  playLogs        ContentPlayLog[]
+  events          ScheduleEvent[]
+  secondaryEvents SecondaryEvent[]
+  program         Program?
+  movie           Movie?
+  commercial      Commercial?
+  promo           Promo?
+  roLines         ReleaseOrderLineItem[]
+
+  @@index([category, deletedAt])
+  @@index([title])
+}
+
+model MediaAssetVersion {
+  id          String     @id @default(cuid())
+  assetId     String
+  version     Int
+  durationSec Int
+  fileRef     String?
+  notes       String?
+  createdById String?
+  createdAt   DateTime   @default(now())
+  asset       MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, version])
+}
+
+model Program {
+  id            String     @id @default(cuid())
+  assetId       String     @unique
+  genre         String?
+  season        Int?
+  episode       Int?
+  contentRating String?
+  isLive        Boolean    @default(false)
+  asset         MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+model Movie {
+  id            String     @id @default(cuid())
+  assetId       String     @unique
+  director      String?
+  releaseYear   Int?
+  certificate   String?
+  asset         MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+model Commercial {
+  id        String     @id @default(cuid())
+  assetId   String     @unique
+  clockNumber String? // industry clock/ISCI number
+  agencyRef   String?
+  asset     MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+}
+
+model Promo {
+  id            String         @id @default(cuid())
+  assetId       String         @unique
+  campaignId    String?
+  promotedTitle String?
+  asset         MediaAsset     @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  campaign      PromoCampaign? @relation(fields: [campaignId], references: [id])
+}
+
+enum PromoPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+model PromoCampaign {
+  id               String        @id @default(cuid())
+  name             String
+  startDate        DateTime
+  endDate          DateTime
+  priority         PromoPriority @default(NORMAL)
+  rotation         String        @default("EVEN") // EVEN | WEIGHTED | SEQUENTIAL
+  channelIds       String[]      @default([])    // empty = all
+  dayStartMinute   Int?          // time-of-day window (minutes from local midnight)
+  dayEndMinute     Int?
+  minPlays         Int?
+  maxPlays         Int?
+  maxPerDay        Int?
+  minGapSec        Int?          // minimum seconds between two plays of the same promo
+  isActive         Boolean       @default(true)
+  isDemo           Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  promos           Promo[]
+}
+
+// ───────────────────────────── Rights ─────────────────────────────
+
+model ContentLicense {
+  id                  String     @id @default(cuid())
+  assetId             String
+  licensor            String
+  contractRef         String?
+  agreementId         String?
+  territories         String[]   @default([])
+  permittedChannelIds String[]   @default([]) // empty = all
+  validFrom           DateTime
+  validTo             DateTime
+  maxPlays            Int?
+  restricted          Boolean    @default(false)
+  notes               String?
+  warnDaysBefore      Int        @default(30)
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+  deletedAt           DateTime?
+  asset               MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  agreement           Agreement? @relation(fields: [agreementId], references: [id])
+
+  @@index([assetId])
+  @@index([validTo])
+}
+
+enum PlayStatus {
+  PLANNED
+  CONFIRMED
+  MISSED
+}
+
+model ContentPlayLog {
+  id          String     @id @default(cuid())
+  assetId     String
+  channelId   String
+  eventId     String?    @unique
+  plannedAt   DateTime
+  airedAt     DateTime?
+  status      PlayStatus @default(PLANNED)
+  source      String     @default("SCHEDULE") // SCHEDULE | AS_RUN_IMPORT | MANUAL
+  confirmedById String?
+  createdAt   DateTime   @default(now())
+  asset       MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  channel     Channel    @relation(fields: [channelId], references: [id])
+  event       ScheduleEvent? @relation(fields: [eventId], references: [id], onDelete: SetNull)
+
+  @@index([assetId, status])
+}
+
+// ───────────────────────────── Scheduling ─────────────────────────────
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model Schedule {
+  id            String         @id @default(cuid())
+  channelId     String
+  broadcastDate String         // YYYY-MM-DD in the channel's time zone
+  status        ScheduleStatus @default(DRAFT)
+  version       Int            @default(0) // last published version number
+  lockVersion   Int            @default(0) // optimistic concurrency counter, bumped on every change
+  hasUnpublishedChanges Boolean @default(true)
+  publishedAt   DateTime?
+  publishedById String?
+  notes         String?
+  isDemo        Boolean        @default(false)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  channel       Channel        @relation(fields: [channelId], references: [id])
+  events        ScheduleEvent[]
+  versions      ScheduleVersion[]
+  breaks        AdvertisingBreak[]
+
+  @@unique([channelId, broadcastDate])
+}
+
+model ScheduleVersion {
+  id          String   @id @default(cuid())
+  scheduleId  String
+  version     Int
+  snapshot    Json     // events + breaks at publication
+  comment     String?
+  createdById String?
+  createdAt   DateTime @default(now())
+  schedule    Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  @@unique([scheduleId, version])
+}
+
+enum EventStatus {
+  PLANNED
+  AIRED
+  MISSED
+  CANCELLED
+}
+
+model ScheduleEvent {
+  id              String        @id @default(cuid())
+  scheduleId      String
+  channelId       String
+  assetId         String
+  eventType       AssetCategory
+  title           String        // denormalised asset title at time of scheduling
+  startAt         DateTime
+  durationSec     Int
+  breakId         String?
+  positionInBreak Int?
+  inventoryId     String?       @unique // one spot per inventory position
+  roLineItemId    String?
+  invoiceLineItemId String?     // set once billed; prevents duplicate invoicing
+  status          EventStatus   @default(PLANNED)
+  notes           String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  schedule        Schedule      @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  channel         Channel       @relation(fields: [channelId], references: [id])
+  asset           MediaAsset    @relation(fields: [assetId], references: [id])
+  break           AdvertisingBreak? @relation(fields: [breakId], references: [id], onDelete: SetNull)
+  inventory       AdvertisingInventory? @relation(fields: [inventoryId], references: [id])
+  roLineItem      ReleaseOrderLineItem? @relation(fields: [roLineItemId], references: [id])
+  invoiceLineItem InvoiceLineItem? @relation(fields: [invoiceLineItemId], references: [id])
+  playLog         ContentPlayLog?
+
+  @@index([channelId, startAt])
+  @@index([scheduleId])
+  @@index([roLineItemId])
+}
+
+enum SecondaryCategory {
+  LOGO
+  BUG
+  LOWER_THIRD
+  TICKER
+  OVERLAY
+  COUNTDOWN
+  OTHER
+}
+
+model SecondaryEvent {
+  id         String            @id @default(cuid())
+  channelId  String
+  assetId    String?
+  category   SecondaryCategory
+  label      String
+  startAt    DateTime
+  endAt      DateTime
+  priority   Int               @default(5) // 1 = highest
+  layer      Int               @default(1) // graphics layer; same-layer overlaps conflict
+  isActive   Boolean           @default(true)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  deletedAt  DateTime?
+  channel    Channel           @relation(fields: [channelId], references: [id])
+  asset      MediaAsset?       @relation(fields: [assetId], references: [id])
+
+  @@index([channelId, startAt])
+}
+
+model SchedulingRule {
+  id          String   @id @default(cuid())
+  key         String   // see src/lib/scheduling/rules.ts RULE_DEFINITIONS
+  channelId   String?  // null = applies to every channel
+  enabled     Boolean  @default(true)
+  severity    String   @default("ERROR") // ERROR blocks the change, WARNING allows it
+  params      Json     @default("{}")
+  updatedAt   DateTime @updatedAt
+  channel     Channel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@unique([key, channelId])
+}
+
+// ───────────────────────────── Advertising inventory ─────────────────────────────
+
+model AdvertisingBreak {
+  id            String   @id @default(cuid())
+  channelId     String
+  scheduleId    String
+  code          String   // e.g. B1930-1
+  startAt       DateTime
+  maxDurationSec Int
+  programTitle  String?  // program the break sits in, for inventory reports
+  timeBand      String?  // e.g. PRIME, DAY, LATE
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  channel       Channel  @relation(fields: [channelId], references: [id])
+  schedule      Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  inventory     AdvertisingInventory[]
+  events        ScheduleEvent[]
+
+  @@unique([scheduleId, code])
+  @@index([channelId, startAt])
+}
+
+enum InventoryStatus {
+  AVAILABLE
+  RESERVED
+  BOOKED
+  SCHEDULED
+  AIRED
+  CANCELLED
+  UNAVAILABLE
+}
+
+model AdvertisingInventory {
+  id           String          @id @default(cuid())
+  breakId      String
+  position     Int
+  durationSec  Int
+  rate         Decimal         @db.Decimal(18, 2) // estimated value of the position
+  priority     Int             @default(5)
+  status       InventoryStatus @default(AVAILABLE)
+  roLineItemId String?
+  version      Int             @default(0) // optimistic lock; every status change must match + bump
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  break        AdvertisingBreak @relation(fields: [breakId], references: [id], onDelete: Cascade)
+  roLineItem   ReleaseOrderLineItem? @relation(fields: [roLineItemId], references: [id])
+  event        ScheduleEvent?
+
+  @@unique([breakId, position])
+  @@index([status])
+  @@index([roLineItemId])
+}
+
+// ───────────────────────────── Agencies, clients, deals ─────────────────────────────
+
+enum AccountStatus {
+  ACTIVE
+  ON_HOLD
+  BLOCKED
+  INACTIVE
+}
+
+model Agency {
+  id               String        @id @default(cuid())
+  code             String        @unique
+  name             String
+  contactName      String?
+  email            String?
+  phone            String?
+  billingAddress   String?
+  taxId            String?
+  commissionPct    Decimal       @default(15) @db.Decimal(9, 4)
+  creditTermsDays  Int           @default(30)
+  creditLimit      Decimal?      @db.Decimal(18, 2)
+  status           AccountStatus @default(ACTIVE)
+  accountManagerId String?
+  isDemo           Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+  accountManager   User?         @relation("AgencyManager", fields: [accountManagerId], references: [id])
+  clients          Client[]
+  deals            Deal[]
+  releaseOrders    ReleaseOrder[]
+  agreements       Agreement[]
+  invoices         Invoice[]
+  payments         Payment[]
+}
+
+model Client {
+  id               String        @id @default(cuid())
+  code             String        @unique
+  name             String
+  agencyId         String?       // default buying agency
+  contactName      String?
+  email            String?
+  phone            String?
+  billingAddress   String?
+  taxId            String?
+  taxRateId        String?
+  taxExempt        Boolean       @default(false)
+  creditTermsDays  Int           @default(30)
+  creditLimit      Decimal?      @db.Decimal(18, 2)
+  status           AccountStatus @default(ACTIVE)
+  productCategory  String?       // for competitor separation
+  accountManagerId String?
+  isDemo           Boolean       @default(false)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+  deletedAt        DateTime?
+  agency           Agency?       @relation(fields: [agencyId], references: [id])
+  taxRate          TaxRate?      @relation(fields: [taxRateId], references: [id])
+  accountManager   User?         @relation("ClientManager", fields: [accountManagerId], references: [id])
+  assets           MediaAsset[]
+  deals            Deal[]
+  releaseOrders    ReleaseOrder[]
+  agreements       Agreement[]
+  invoices         Invoice[]
+  payments         Payment[]
+  rateCards        RateCard[]
+}
+
+enum DealStatus {
+  DRAFT
+  NEGOTIATION
+  CONFIRMED
+  CLOSED
+  CANCELLED
+}
+
+model Deal {
+  id            String     @id @default(cuid())
+  number        String     @unique
+  agencyId      String?
+  clientId      String
+  campaignName  String
+  startDate     DateTime
+  endDate       DateTime
+  status        DealStatus @default(DRAFT)
+  currency      String     @default("USD")
+  discountPct   Decimal    @default(0) @db.Decimal(9, 4)
+  commissionPct Decimal    @default(0) @db.Decimal(9, 4)
+  taxRatePct    Decimal    @default(0) @db.Decimal(9, 4)
+  grossAmount   Decimal    @default(0) @db.Decimal(18, 2)
+  discountAmount Decimal   @default(0) @db.Decimal(18, 2)
+  commissionAmount Decimal @default(0) @db.Decimal(18, 2)
+  taxAmount     Decimal    @default(0) @db.Decimal(18, 2)
+  totalAmount   Decimal    @default(0) @db.Decimal(18, 2)
+  notes         String?
+  approvalHistory Json     @default("[]")
+  createdById   String?
+  isDemo        Boolean    @default(false)
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  deletedAt     DateTime?
+  agency        Agency?    @relation(fields: [agencyId], references: [id])
+  client        Client     @relation(fields: [clientId], references: [id])
+  lines         DealLineItem[]
+  releaseOrders ReleaseOrder[]
+  agreements    Agreement[]
+}
+
+model DealLineItem {
+  id            String   @id @default(cuid())
+  dealId        String
+  channelId     String
+  product       String   // e.g. "Prime time 30s spot"
+  timeBand      String?
+  spotDurationSec Int
+  quantity      Int
+  rate          Decimal  @db.Decimal(18, 2) // per spot
+  discountPct   Decimal  @default(0) @db.Decimal(9, 4)
+  grossAmount   Decimal  @default(0) @db.Decimal(18, 2)
+  netAmount     Decimal  @default(0) @db.Decimal(18, 2)
+  deal          Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  channel       Channel  @relation(fields: [channelId], references: [id])
+}
+
+enum ROStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  SCHEDULED
+  COMPLETED
+  REJECTED
+  CANCELLED
+}
+
+model ReleaseOrder {
+  id             String     @id @default(cuid())
+  number         String     @unique
+  dealId         String?
+  agencyId       String?
+  clientId       String
+  campaignName   String
+  startDate      DateTime
+  endDate        DateTime
+  status         ROStatus   @default(DRAFT)
+  revision       Int        @default(0)
+  approvalStage  Int        @default(0) // index into configured approval stages while SUBMITTED
+  currency       String     @default("USD")
+  commissionPct  Decimal    @default(0) @db.Decimal(9, 4)
+  taxRatePct     Decimal    @default(0) @db.Decimal(9, 4)
+  grossAmount    Decimal    @default(0) @db.Decimal(18, 2)
+  discountAmount Decimal    @default(0) @db.Decimal(18, 2)
+  commissionAmount Decimal  @default(0) @db.Decimal(18, 2)
+  taxAmount      Decimal    @default(0) @db.Decimal(18, 2)
+  totalAmount    Decimal    @default(0) @db.Decimal(18, 2)
+  clientRef      String?    // agency's own RO/PO reference
+  notes          String?
+  cancelReason   String?
+  createdById    String?
+  isDemo         Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  deal           Deal?      @relation(fields: [dealId], references: [id])
+  agency         Agency?    @relation(fields: [agencyId], references: [id])
+  client         Client     @relation(fields: [clientId], references: [id])
+  lines          ReleaseOrderLineItem[]
+  approvals      ROApproval[]
+  revisions      ReleaseOrderRevision[]
+  invoices       Invoice[]
+
+  @@index([status])
+}
+
+model ReleaseOrderLineItem {
+  id              String       @id @default(cuid())
+  releaseOrderId  String
+  channelId       String
+  assetId         String?      // commercial to air
+  description     String
+  timeBand        String?      // PRIME | DAY | LATE | ANY
+  spotDurationSec Int
+  quantity        Int
+  rate            Decimal      @db.Decimal(18, 2)
+  discountPct     Decimal      @default(0) @db.Decimal(9, 4)
+  startDate       DateTime
+  endDate         DateTime
+  maxPerDay       Int?
+  grossAmount     Decimal      @default(0) @db.Decimal(18, 2)
+  netAmount       Decimal      @default(0) @db.Decimal(18, 2)
+  releaseOrder    ReleaseOrder @relation(fields: [releaseOrderId], references: [id], onDelete: Cascade)
+  channel         Channel      @relation(fields: [channelId], references: [id])
+  asset           MediaAsset?  @relation(fields: [assetId], references: [id])
+  inventory       AdvertisingInventory[]
+  events          ScheduleEvent[]
+}
+
+model ROApproval {
+  id             String       @id @default(cuid())
+  releaseOrderId String
+  revision       Int
+  stage          Int
+  stageName      String
+  action         String       // SUBMITTED | APPROVED | REJECTED | CANCELLED | AMENDED | COMPLETED | SCHEDULED
+  comment        String?
+  userId         String?
+  userName       String?
+  createdAt      DateTime     @default(now())
+  releaseOrder   ReleaseOrder @relation(fields: [releaseOrderId], references: [id], onDelete: Cascade)
+
+  @@index([releaseOrderId])
+}
+
+model ReleaseOrderRevision {
+  id             String       @id @default(cuid())
+  releaseOrderId String
+  revision       Int
+  snapshot       Json
+  reason         String?
+  createdById    String?
+  createdAt      DateTime     @default(now())
+  releaseOrder   ReleaseOrder @relation(fields: [releaseOrderId], references: [id], onDelete: Cascade)
+
+  @@unique([releaseOrderId, revision])
+}
+
+enum AgreementStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+model Agreement {
+  id          String          @id @default(cuid())
+  number      String          @unique
+  title       String
+  type        String          @default("ADVERTISING") // ADVERTISING | CONTENT_LICENSE | SERVICE
+  agencyId    String?
+  clientId    String?
+  dealId      String?
+  startDate   DateTime
+  endDate     DateTime
+  value       Decimal?        @db.Decimal(18, 2)
+  status      AgreementStatus @default(DRAFT)
+  terms       String?
+  signedAt    DateTime?
+  isDemo      Boolean         @default(false)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  deletedAt   DateTime?
+  agency      Agency?         @relation(fields: [agencyId], references: [id])
+  client      Client?         @relation(fields: [clientId], references: [id])
+  deal        Deal?           @relation(fields: [dealId], references: [id])
+  licenses    ContentLicense[]
+}
+
+// ───────────────────────────── Pricing & billing ─────────────────────────────
+
+model TaxRate {
+  id           String   @id @default(cuid())
+  name         String
+  ratePct      Decimal  @db.Decimal(9, 4)
+  jurisdiction String?
+  isDefault    Boolean  @default(false)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  clients      Client[]
+}
+
+model RateCard {
+  id        String    @id @default(cuid())
+  name      String
+  channelId String
+  clientId  String?   // set for client-specific pricing
+  currency  String    @default("USD")
+  validFrom DateTime
+  validTo   DateTime?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  channel   Channel   @relation(fields: [channelId], references: [id])
+  client    Client?   @relation(fields: [clientId], references: [id])
+  items     RateCardItem[]
+}
+
+model RateCardItem {
+  id             String   @id @default(cuid())
+  rateCardId     String
+  timeBand       String   // PRIME | DAY | LATE | ANY
+  position       String   @default("ANY") // FIRST | LAST | ANY
+  baseDurationSec Int     @default(30)
+  rate           Decimal  @db.Decimal(18, 2) // per base duration
+  rateCard       RateCard @relation(fields: [rateCardId], references: [id], onDelete: Cascade)
+
+  @@unique([rateCardId, timeBand, position])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  CREDITED
+}
+
+model Invoice {
+  id             String        @id @default(cuid())
+  number         String?       @unique // assigned on issue
+  clientId       String
+  agencyId       String?
+  releaseOrderId String?
+  isManual       Boolean       @default(false)
+  status         InvoiceStatus @default(DRAFT)
+  currency       String        @default("USD")
+  issueDate      DateTime?
+  dueDate        DateTime?
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  subtotal       Decimal       @default(0) @db.Decimal(18, 2) // gross
+  discountTotal  Decimal       @default(0) @db.Decimal(18, 2)
+  commissionTotal Decimal      @default(0) @db.Decimal(18, 2)
+  taxTotal       Decimal       @default(0) @db.Decimal(18, 2)
+  total          Decimal       @default(0) @db.Decimal(18, 2)
+  amountPaid     Decimal       @default(0) @db.Decimal(18, 2)
+  creditedTotal  Decimal       @default(0) @db.Decimal(18, 2)
+  balance        Decimal       @default(0) @db.Decimal(18, 2)
+  notes          String?
+  paymentToken   String?       @unique // opaque token for the online payment link
+  createdById    String?
+  isDemo         Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  client         Client        @relation(fields: [clientId], references: [id])
+  agency         Agency?       @relation(fields: [agencyId], references: [id])
+  releaseOrder   ReleaseOrder? @relation(fields: [releaseOrderId], references: [id])
+  lines          InvoiceLineItem[]
+  allocations    PaymentAllocation[]
+  creditNotes    CreditNote[]
+  transactions   FinancialTransaction[]
+
+  @@index([status])
+  @@index([dueDate])
+}
+
+model InvoiceLineItem {
+  id             String   @id @default(cuid())
+  invoiceId      String
+  roLineItemId   String?
+  description    String
+  quantity       Decimal  @db.Decimal(18, 4)
+  unitPrice      Decimal  @db.Decimal(18, 2)
+  discountPct    Decimal  @default(0) @db.Decimal(9, 4)
+  commissionPct  Decimal  @default(0) @db.Decimal(9, 4)
+  taxRatePct     Decimal  @default(0) @db.Decimal(9, 4)
+  grossAmount    Decimal  @db.Decimal(18, 2)
+  discountAmount Decimal  @db.Decimal(18, 2)
+  commissionAmount Decimal @db.Decimal(18, 2)
+  taxAmount      Decimal  @db.Decimal(18, 2)
+  totalAmount    Decimal  @db.Decimal(18, 2)
+  invoice        Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  events         ScheduleEvent[]
+}
+
+enum PaymentStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  REVERSED
+}
+
+model Payment {
+  id          String        @id @default(cuid())
+  clientId    String?
+  agencyId    String?
+  amount      Decimal       @db.Decimal(18, 2)
+  currency    String        @default("USD")
+  method      String        // BANK_TRANSFER | CHEQUE | CASH | CARD | ONLINE
+  reference   String
+  receivedAt  DateTime
+  status      PaymentStatus @default(CONFIRMED)
+  gateway     String?       // provider key when received online
+  gatewayRef  String?       @unique // provider transaction id; prevents double-processing webhooks
+  isSimulated Boolean       @default(false)
+  notes       String?
+  createdById String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  client      Client?       @relation(fields: [clientId], references: [id])
+  agency      Agency?       @relation(fields: [agencyId], references: [id])
+  allocations PaymentAllocation[]
+
+  @@unique([method, reference])
+}
+
+model PaymentAllocation {
+  id          String   @id @default(cuid())
+  paymentId   String
+  invoiceId   String
+  amount      Decimal  @db.Decimal(18, 2)
+  createdById String?
+  createdAt   DateTime @default(now())
+  payment     Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+
+  @@index([invoiceId])
+}
+
+model CreditNote {
+  id          String   @id @default(cuid())
+  number      String   @unique
+  invoiceId   String
+  amount      Decimal  @db.Decimal(18, 2)
+  reason      String
+  status      String   @default("ISSUED") // ISSUED | VOID
+  createdById String?
+  issuedAt    DateTime @default(now())
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+}
+
+// Append-only ledger of every financial change made to an invoice.
+model FinancialTransaction {
+  id          String   @id @default(cuid())
+  invoiceId   String
+  type        String   // ISSUE | PAYMENT_ALLOCATION | CREDIT_NOTE | ADJUSTMENT | CANCEL
+  amount      Decimal  @db.Decimal(18, 2)
+  balanceAfter Decimal @db.Decimal(18, 2)
+  reference   String?
+  userId      String?
+  createdAt   DateTime @default(now())
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+}
+
+// Gap-free document numbering (RO, INV, CN, DEAL, AGR). Incremented with a row lock.
+model NumberSequence {
+  key     String @id
+  prefix  String
+  next    Int    @default(1)
+  padding Int    @default(5)
+}
+
+// ───────────────────────────── Notifications ─────────────────────────────
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+}
+
+model NotificationTemplate {
+  id             String   @id @default(cuid())
+  key            String   @unique // event key e.g. ro.submitted
+  name           String
+  subject        String
+  body           String   // {{placeholders}}
+  recipientRoles String[] @default([])
+  emailEnabled   Boolean  @default(true)
+  inAppEnabled   Boolean  @default(true)
+  updatedAt      DateTime @updatedAt
+}
+
+model EmailLog {
+  id        String   @id @default(cuid())
+  template  String?
+  to        String
+  subject   String
+  body      String
+  provider  String
+  status    String   // SENT | FAILED | PREVIEW
+  error     String?
+  attempts  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ───────────────────────────── Integrations ─────────────────────────────
+
+model Integration {
+  id            String   @id @default(cuid())
+  key           String   @unique // SAP | TALLY | AMS | EMAIL | PAYMENT | AUTOMATION
+  name          String
+  adapter       String   // adapter implementation key
+  enabled       Boolean  @default(false)
+  config        Json     @default("{}") // non-secret settings only; secrets come from env vars
+  status        String   @default("NOT_CONFIGURED") // NOT_CONFIGURED | TEST_MODE | CONNECTED | ERROR
+  lastCheckedAt DateTime?
+  lastError     String?
+  updatedAt     DateTime @updatedAt
+  jobs          IntegrationJob[]
+}
+
+model IntegrationJob {
+  id            String      @id @default(cuid())
+  integrationId String
+  direction     String      // IMPORT | EXPORT
+  kind          String      // e.g. INVOICES, MEDIA_METADATA, PLAYLIST
+  status        String      @default("PENDING") // PENDING | RUNNING | SUCCEEDED | FAILED | DEAD
+  attempts      Int         @default(0)
+  maxAttempts   Int         @default(3)
+  nextRunAt     DateTime    @default(now())
+  dedupeKey     String?     @unique // hash of the payload; prevents duplicate exports/imports
+  params        Json        @default("{}")
+  result        Json?
+  error         String?
+  outputFileId  String?
+  createdById   String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextRunAt])
+}
+
+// ───────────────────────────── Files, audit, settings ─────────────────────────────
+
+model FileAttachment {
+  id          String   @id @default(cuid())
+  entityType  String   // RELEASE_ORDER | AGREEMENT | INVOICE | MEDIA_ASSET | INTEGRATION_JOB | COMPANY
+  entityId    String
+  fileName    String
+  storageKey  String   @unique
+  mimeType    String
+  sizeBytes   Int
+  sha256      String
+  scanStatus  String   @default("PENDING") // PENDING | CLEAN | INFECTED | NOT_SCANNED
+  uploadedById String?
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+
+  @@index([entityType, entityId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  userEmail  String?
+  action     String   // e.g. schedule.publish, auth.login.failed
+  entityType String?
+  entityId   String?
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now())
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([action])
+}
+
+model SystemSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+  updatedById String?
+}

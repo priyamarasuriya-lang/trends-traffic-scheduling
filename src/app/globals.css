@@ -1,0 +1,74 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-primary: var(--primary);
+  --color-primary-fg: var(--primary-fg);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  /* Media category palette — taken from the TRENDS scheduling reference tiles */
+  --color-cat-program: #f4c14f;
+  --color-cat-movie: #2fc5ae;
+  --color-cat-promo: #e3ae2f;
+  --color-cat-commercial: #ff6f59;
+  --color-cat-timer: #94a3b8;
+  --color-cat-slide: #ffd166;
+  --color-cat-comingup: #f97316;
+  --color-cat-filler: #34495e;
+  --color-cat-newmedia: #22b8cf;
+  --color-cat-secondary: #dc2626;
+}
+
+:root {
+  --bg: #f4f5f7;
+  --surface: #ffffff;
+  --surface-2: #f8fafc;
+  --border: #e3e6ea;
+  --fg: #1f2933;
+  --muted: #6b7785;
+  --primary: #0f766e;
+  --primary-fg: #ffffff;
+  --danger: #dc2626;
+  --success: #15803d;
+  --warning: #b45309;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0e1116;
+  --surface: #161b22;
+  --surface-2: #1c222b;
+  --border: #2a313c;
+  --fg: #e6e9ee;
+  --muted: #8b96a5;
+  --primary: #2dd4bf;
+  --primary-fg: #04201d;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  color-scheme: dark;
+}
+
+html, body { background: var(--bg); color: var(--fg); }
+body { font-family: var(--font-sans); font-size: 14px; -webkit-font-smoothing: antialiased; }
+* { border-color: var(--border); }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+@media print {
+  aside, header, .no-print { display: none !important; }
+  main { padding: 0 !important; }
+  body { background: white; color: black; }
+}
