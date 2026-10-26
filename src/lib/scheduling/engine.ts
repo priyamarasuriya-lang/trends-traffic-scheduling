@@ -251,7 +251,7 @@ export function validateSchedule(ctx: EngineContext): Violation[] {
       const range = { start: a.startAt, end: endOf(b) };
       if (a.assetId === b.assetId && gap < sameSep && a.eventType === "COMMERCIAL") {
         add("COMMERCIAL_MIN_SEPARATION", `"${a.title}" airs at ${fmt(a.startAt, tz)} and again at ${fmt(b.startAt, tz)}; minimum separation is ${sameSep}s.`, [a.id, b.id], range);
-      } else if (aa.brand && ab.brand && aa.brand.toLowerCase() === ab.brand.toLowerCase() && gap < brandSep && a.breakId !== b.breakId) {
+      } else if (aa.brand && ab.brand && aa.brand.toLowerCase() === ab.brand.toLowerCase() && gap < brandSep && (!a.breakId || a.breakId !== b.breakId)) {
         add("BRAND_SEPARATION", `Brand "${aa.brand}" airs at ${fmt(a.startAt, tz)} and ${fmt(b.startAt, tz)}, only ${Math.max(0, Math.round(gap))}s apart (minimum ${brandSep}s).`, [a.id, b.id], range);
       }
       if (aa.productCategory && aa.productCategory === ab.productCategory && aa.advertiserId && ab.advertiserId && aa.advertiserId !== ab.advertiserId && gap < compSep) {

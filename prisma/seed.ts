@@ -1,4 +1,3 @@
-/* eslint-disable no-console */
 // Development / demonstration seed. Every record created here is flagged
 // isDemo (or uses the "Demo" naming) so it can be identified and removed.
 // Business flows (ROs, approvals, placement, invoicing, payments) go through
