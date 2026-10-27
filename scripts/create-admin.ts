@@ -53,7 +53,7 @@ async function main() {
   await prisma.userRole.upsert({ where: { userId_roleId: { userId: user.id, roleId: role.id } }, create: { userId: user.id, roleId: role.id }, update: {} });
   await prisma.session.deleteMany({ where: { userId: user.id } });
   await prisma.auditLog.create({ data: { action: "user.super_admin_created_cli", entityType: "User", entityId: user.id, userEmail: email } });
-  console.log(`✓ ${email} is a super administrator. Sign in at ${process.env.APP_URL ?? "your APP_URL"}/login`);
+  console.log(`✓ ${email} is a super administrator. Sign in at ${process.env.APP_URL ?? (process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "your APP_URL")}/login`);
 }
 
 main()

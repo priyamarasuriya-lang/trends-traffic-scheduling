@@ -6,7 +6,7 @@ TRENDS is a standard Next.js server application backed by PostgreSQL. It runs on
 
 - PostgreSQL 14+ with a dedicated database and role. Enable point-in-time recovery if your provider offers it.
 - One Node.js instance. You can run several only after replacing the in-memory rate limiter with a shared store (see SECURITY.md).
-- Persistent storage for uploads and integration output: either a mounted volume (`STORAGE_DRIVER=local`, `LOCAL_STORAGE_DIR`) or S3-compatible storage (`STORAGE_DRIVER=s3`).
+- Persistent storage for uploads and integration output: either a mounted volume (`STORAGE_DRIVER=local`, `LOCAL_STORAGE_DIR`) S3-compatible storage (`STORAGE_DRIVER=s3`), Vercel Blob (`vercel-blob`) or the database itself (`database`).
 - HTTPS termination: a load balancer or reverse proxy in front of `npm start`.
 
 ## 2. Configure
@@ -46,24 +46,25 @@ Then sign in, and in **System Settings**:
 
 The repository is ready for Vercel. `vercel.json` sets the build command (`npm run vercel-build`), a daily cron for `/api/jobs` and longer time limits for jobs and report exports.
 
-1. **Import the project.** In Vercel, choose **Add New → Project**, import the GitHub repository and keep the detected Next.js settings.
+The minimum is three things: import the repository, connect a database, and set two variables.
+
+1. **Import the project.** In Vercel, choose **Add New → Project**, import the GitHub repository and keep the detected Next.js settings. The first build fails until a database is connected; that is expected.
 2. **Add a database.** In the project's **Storage** tab, create a **Neon (Postgres)** database and connect it to the project. This sets `DATABASE_URL` (pooled) and `DATABASE_URL_UNPOOLED` (direct, used for migrations).
-3. **Add file storage.** In **Storage**, create a **Blob** store and connect it. This sets `BLOB_READ_WRITE_TOKEN`. The local disk on Vercel is not persistent.
-4. **Set environment variables** in **Settings → Environment Variables**:
+3. **Set the first administrator** in **Settings → Environment Variables**: `ADMIN_EMAIL` and `ADMIN_PASSWORD` (12+ characters, letters and digits), optionally `ADMIN_NAME`. The account is created on deploy only while no super administrator exists. Remove `ADMIN_PASSWORD` after the first successful sign-in.
+4. **Redeploy.** Each build runs the migrations, the idempotent foundation seed, the first-admin bootstrap and `next build`.
+5. **Check it.** Open `/api/health`, then sign in with `ADMIN_EMAIL`.
 
-| Variable | Value |
-| --- | --- |
-| `APP_URL` | `https://<your-project>.vercel.app` (or your custom domain) |
-| `STORAGE_DRIVER` | `vercel-blob` |
-| `ALLOW_UNSCANNED_FILES` | `true` until a scanner is configured, then `false` |
-| `CRON_SECRET` | a long random string; Vercel Cron sends it automatically |
-| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | the first super administrator, created on the first deploy only while none exists. Remove `ADMIN_PASSWORD` after the first successful sign-in |
-| `SEED_DEMO`, `DEV_ADMIN_PASSWORD` | optional: `SEED_DEMO=true` loads demo data for a showcase deployment. Never on a real production database |
-| `PAYMENT_GATEWAY`, `SIMULATED_GATEWAY_SECRET`, `ALLOW_SIMULATED_PAYMENTS` | optional: `simulated` / any secret / `true` for a TEST MODE payment demo |
-| SMTP, Stripe and integration variables | as in the table above, when you have them |
+Defaults on Vercel, and how to change them:
 
-5. **Deploy.** Each build runs the migrations, the idempotent foundation seed, the first-admin bootstrap and `next build`.
-6. **Check it.** Open `/api/health`, then sign in with `ADMIN_EMAIL`.
+| Variable | Default on Vercel | Change it when |
+| --- | --- | --- |
+| `APP_URL` | `https://` + the project's production domain | you use a custom domain |
+| `STORAGE_DRIVER` | `vercel-blob` when a Blob store is connected (`BLOB_READ_WRITE_TOKEN`), otherwise `database` | files grow large: connect a **Blob** store in **Storage**, so new uploads stop counting against the database size |
+| `ALLOW_UNSCANNED_FILES` | unset, so attachments upload but cannot be downloaded until scanned | set `true` until a scanner (`SCANNER_URL`) is configured |
+| `CRON_SECRET` | unset, so the daily job route is disabled | set a long random string to enable reminders, expiry notices and retries; Vercel Cron sends it automatically |
+| `SEED_DEMO`, `DEV_ADMIN_PASSWORD` | unset | `SEED_DEMO=true` loads demo data for a showcase deployment. Never on a real production database |
+| `PAYMENT_GATEWAY`, `SIMULATED_GATEWAY_SECRET`, `ALLOW_SIMULATED_PAYMENTS` | unset | `simulated` / any secret / `true` for a TEST MODE payment demo |
+| SMTP, Stripe and integration variables | unset | as in the table above, when you have them |
 
 Notes for Vercel:
 

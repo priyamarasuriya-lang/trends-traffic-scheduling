@@ -2,6 +2,10 @@
 # Build step for Vercel (and similar platforms that build with production env vars).
 # Migrations use the direct (non-pooled) connection when the host provides one.
 set -e
+if [ -z "$DATABASE_URL" ]; then
+  echo "✗ DATABASE_URL is not set. In Vercel, open Storage, create a Neon (Postgres) database and connect it to this project, then redeploy." >&2
+  exit 1
+fi
 MIGRATE_URL="${DATABASE_URL_UNPOOLED:-${POSTGRES_URL_NON_POOLING:-$DATABASE_URL}}"
 npx prisma generate
 DATABASE_URL="$MIGRATE_URL" npx prisma migrate deploy

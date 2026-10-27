@@ -26,8 +26,13 @@ const securityHeaders = [
   ...(isProd ? [{ key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" }] : []),
 ];
 
+// On Vercel, APP_URL defaults to the project's production domain so it need not be set by hand.
+const vercelUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+const appUrl = process.env.APP_URL || (vercelUrl ? `https://${vercelUrl}` : undefined);
+
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  ...(appUrl ? { env: { APP_URL: appUrl } } : {}),
   serverExternalPackages: ["exceljs", "pdf-lib", "nodemailer", "bcryptjs"],
   experimental: { serverActions: { bodySizeLimit: "10mb" } },
   async headers() {

@@ -1109,3 +1109,11 @@ model SystemSetting {
   updatedAt DateTime @updatedAt
   updatedById String?
 }
+
+/// File bytes for STORAGE_DRIVER=database: used on serverless hosts when no object store is connected.
+model StoredFile {
+  key         String   @id
+  contentType String
+  data        Bytes
+  createdAt   DateTime @default(now())
+}
